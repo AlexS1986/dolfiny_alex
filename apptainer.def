@@ -1,0 +1,11 @@
+Bootstrap: docker
+From: dolfiny/dolfiny
+
+%environment
+    export PYTHONPATH="/home/utils:${PYTHONPATH}"
+
+%post
+    echo 'export PYTHONPATH="/home/utils:${PYTHONPATH}"' >> /environment
+
+%startscript
+    exec tail -f /dev/null

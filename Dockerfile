@@ -1,5 +1,3 @@
-# Use the dolfinx/dolfinx:stable image as base
-# FROM dolfinx/dolfinx:stable
 FROM dolfiny/dolfiny
 
 
