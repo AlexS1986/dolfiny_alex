@@ -180,7 +180,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     min_iters = 2
     dt_scale_down = 0.5
     dt_scale_up = 2.0
-    print_bool = False
+    print_bool = True
 
     # Options for PETSc backend
     name = "von_mises_plasticity"
@@ -228,14 +228,20 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
         converged = False
         
         iters = max_iters + 1 # if not converged
+        
+        original_stdout = sys.stdout
+        dummy_stream = io.StringIO()
         try:
+            sys.stdout = dummy_stream
             problem.solve()
             snes : PETSc.SNES = problem.snes
             
             iters = snes.getIterationNumber()
             converged = snes.is_converged
             problem.status(verbose=True, error_on_failure=True)
+            sys.stdout = original_stdout
         except RuntimeError:
+            sys.stdout = original_stdout
             dt = dt_scale_down*dt
             restart_solution = True
             if comm.Get_rank() == 0 and print_bool:
