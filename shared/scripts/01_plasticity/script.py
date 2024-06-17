@@ -70,8 +70,9 @@ for vals in all_combinations:
 
         intermediate_results.append(principal_tensor_values_at_failure)
 
-        print("Running computation {} of {} total".format(computation, total_iterations))
-        sys.stdout.flush()
+        if rank == 0:
+            print("Running computation {} of {} total".format(computation, total_iterations))
+            sys.stdout.flush()
 
         computation += 1
         comm.barrier()

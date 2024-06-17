@@ -19,14 +19,14 @@ tensor_param = np.array([[0.01, 0.0, 0.0],
                              [0.0, 0.0, 0.0],
                              [0.0, 0.0, 0.0]])
 
-# sim_result = sim.run_simulation(eps_mac_param=tensor_param, scal=1.0, comm=comm)
+sim_result = sim.run_simulation(eps_mac_param=tensor_param, scal=1.0, comm=comm)
 
 
 
-desired_simulation_result = 0.1
-def simulation_wrapper(scal_param):
-            return sim.run_simulation(eps_mac_param=tensor_param, scal=scal_param, comm=comm)
-scal_at_failure = ps.bisection_method(simulation_wrapper, desired_simulation_result, 0.001, 1.0, tol=0.03 * desired_simulation_result, comm=comm)
+# desired_simulation_result = 0.1
+# def simulation_wrapper(scal_param):
+#             return sim.run_simulation(eps_mac_param=tensor_param, scal=scal_param, comm=comm)
+# scal_at_failure = ps.bisection_method(simulation_wrapper, desired_simulation_result, 0.001, 1.0, tol=0.03 * desired_simulation_result, comm=comm)
 a = 1
 
 
