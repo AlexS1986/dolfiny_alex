@@ -176,8 +176,8 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     dt = Tend/steps
     
     # time stepping
-    max_iters = 4
-    min_iters = 2
+    max_iters = 8
+    min_iters = 4
     dt_scale_down = 0.5
     dt_scale_up = 2.0
     print_bool = True
