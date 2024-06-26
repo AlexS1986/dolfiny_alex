@@ -440,6 +440,7 @@ Temporary Items
 *vtk
 *.csv
 
+simulation_*
 */resources/*
 
 *.err.*

@@ -25,11 +25,14 @@ script_name_without_extension = os.path.splitext(os.path.basename(__file__))[0]
 tensor_critical_value_hom_material = 1.0
 desired_simulation_result = 0.1
 
-if rank == 0 and current_computation == 0:
-    # Remove the file if it exists
-    file_path = os.path.join(script_path, 'failure_surface.csv')
-    if os.path.exists(file_path):
-        os.remove(file_path)
+if rank == 0:
+    # Remove the files if they exist
+    principal_values_file_path = os.path.join(script_path, 'failure_surface_principal_values.csv')
+    tensor_values_file_path = os.path.join(script_path, 'failure_surface_tensor_values.csv')
+    if os.path.exists(principal_values_file_path):
+        os.remove(principal_values_file_path)
+    if os.path.exists(tensor_values_file_path):
+        os.remove(tensor_values_file_path)
 
 # Define arrays
 n_values = 3
@@ -77,11 +80,14 @@ for vals in combinations_to_process:
         
         principal_tensor_values_at_failure = np.linalg.eigvals(tensor_param * scal_at_failure) 
 
-        # Directly write results to file
+        # Directly write results to files
         if rank == 0:
-            with open(os.path.join(script_path, 'failure_surface.csv'), 'a') as file:
-                if np.linalg.norm(principal_tensor_values_at_failure) < 5.0 * tensor_critical_value_hom_material:
-                    file.write(','.join(map(str, principal_tensor_values_at_failure)) + '\n')
+            if np.linalg.norm(principal_tensor_values_at_failure) < 5.0 * tensor_critical_value_hom_material:
+                with open(principal_values_file_path, 'a') as principal_file:
+                    principal_file.write(','.join(map(str, principal_tensor_values_at_failure)) + '\n')
+                
+                with open(tensor_values_file_path, 'a') as tensor_file:
+                    tensor_file.write(','.join(map(str, tensor_param.flatten())) + '\n')
 
         if rank == 0:
             print("Running computation {} of {} total".format(current_computation + 1, chunk_size))
@@ -94,6 +100,7 @@ for vals in combinations_to_process:
             print("tensor value is: \n")
             print(tensor_param)
             sys.stdout.flush()
+
 
 # import numpy as np
 # import plasticity_foam_function as sim
