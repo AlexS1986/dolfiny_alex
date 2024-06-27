@@ -5,7 +5,6 @@
 #SBATCH --mem-per-cpu=5000
 #SBATCH -n 16
 #SBATCH -e /home/as12vapa/dolfiny_alex/shared/scripts/02_plasticity_parameter_study/{FOLDER_NAME}/%x.err.%j
-#SBATCH -o /home/as12vapa/dolfiny_alex/shared/scripts/02_plasticity_parameter_study/{FOLDER_NAME}/%x.out.%j
 #SBATCH --mail-type=End
 #SBATCH -C i01
 
