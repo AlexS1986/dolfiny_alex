@@ -10,7 +10,7 @@ import ufl
 from dolfinx import default_scalar_type as scalar
 
 import matplotlib.pyplot as plt
-# import mesh_iso6892_gmshapi as mg
+import mesh_iso6892_gmshapi as mg
 import numpy as np
 
 import dolfiny
@@ -46,7 +46,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     script_name_without_extension = os.path.splitext(os.path.basename(__file__))[0]
     outputfile_xdmf_path = alex.os.outputfile_xdmf_full_path(script_path,script_name_without_extension)
 
-    with dlfx.io.XDMFFile(comm, os.path.join(alex.os.resources_directory,'msh2xdmf.xdmf'), 'r') as mesh_inp: 
+    with dlfx.io.XDMFFile(comm, os.path.join(script_path,'msh2xdmf.xdmf'), 'r') as mesh_inp: 
             domain = mesh_inp.read_mesh()
 
     
@@ -56,6 +56,14 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     Sy = dolfinx.fem.Constant(domain, scalar(0.300))  # initial yield stress [GPa]
     bh = dolfinx.fem.Constant(domain, scalar(20.00))  # isotropic hardening: saturation rate  [-]
     qh = dolfinx.fem.Constant(domain, scalar(0.100))  # isotropic hardening: saturation value [GPa]
+    
+    # Phasenfeld-Parameter
+    Gc = dlfx.fem.Constant(domain, 2.0)
+    epsilon = dlfx.fem.Constant(domain, 0.1)
+    eta = dlfx.fem.Constant(domain, 0.001)
+    Mob = dlfx.fem.Constant(domain, 100.0)
+    iMob = dlfx.fem.Constant(domain, 1.0/Mob.value)
+    beta = dlfx.fem.Constant(domain, 0.1)
 
 
     # Solid: load parameters
@@ -70,18 +78,46 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
 
     # Define elements
     Ue = basix.ufl.element("P", domain.basix_cell(), p, shape=(domain.geometry.dim,))
+    Se = basix.ufl.element("P", domain.basix_cell(), p, shape=())
     He = basix.ufl.quadrature_element(domain.basix_cell(), value_shape=(), degree=quad_degree)
     Te = basix.ufl.blocked_element(He, shape=(domain.geometry.dim, domain.geometry.dim), symmetry=True)
 
     # Define function spaces
-    Uf = dolfinx.fem.functionspace(domain, Ue)
+    # Uf = dolfinx.fem.functionspace(domain, Ue)
+    # Sf = dolfinx.fem.functionspace(domain, Se)
+    
+    Wf = dlfx.fem.functionspace(domain, basix.ufl.mixed_element([Ue, Se]))
     Tf = dolfinx.fem.functionspace(domain, Te)
     Hf = dolfinx.fem.functionspace(domain, He)
 
-    # Define functions
-    u = dolfinx.fem.Function(Uf, name="u")  # displacement
-    urestart = dolfinx.fem.Function(Uf, name="urestart")  # displacement
-    urestart.x.array[:] = np.full_like(urestart.x.array,0.0,dtype=dolfinx.default_scalar_type)
+    # # Define functions
+    # u = dolfinx.fem.Function(Uf, name="u")  # displacement
+    # urestart = dolfinx.fem.Function(Uf, name="urestart")  # displacement
+    # urestart.x.array[:] = np.full_like(urestart.x.array,0.0,dtype=dolfinx.default_scalar_type)    
+    
+    # #phasefield
+    # s = dolfinx.fem.Function(Sf, name="s")  
+    # srestart = dolfinx.fem.Function(Sf, name="urestart") 
+    # srestart.x.array[:] = np.full_like(srestart.x.array,0.0,dtype=dolfinx.default_scalar_type)
+    
+    # Loesung (aktuell, alt), Restartloesung, Testfunktion
+    w =  dlfx.fem.Function(Wf)
+    wm1 =  dlfx.fem.Function(Wf)
+    wrestart =  dlfx.fem.Function(Wf)
+    δw = ufl.TestFunction(Wf)
+
+    # Aufspalten in Verschiebung udn Bruchfeld
+    u, s = ufl.split(w)
+    um1, sm1 = ufl.split(wm1)
+    δu, δs = ufl.split(δw)
+    urestart, srestart = ufl.split(wrestart)
+    sdot = s-sm1
+    
+    # Initialisier s=1
+    wm1.sub(1).x.array[:] = np.ones_like(wm1.sub(1).x.array[:])
+    wrestart.x.array[:] = wm1.x.array[:]
+    
+    
     eps_p = dolfinx.fem.Function(Tf, name="P")  # plastic strain
     eps_p_restart = dolfinx.fem.Function(Tf, name="P_restart")  # plastic strain
     eps_p_restart.x.array[:] = np.full_like(eps_p_restart.x.array,0.0,dtype=dolfinx.default_scalar_type)
@@ -89,13 +125,13 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     h_restart = dolfinx.fem.Function(Hf, name="h_restart")  # isotropic hardening
     h_restart.x.array[:] = np.full_like(h_restart.x.array,0.0,dtype=dolfinx.default_scalar_type)
 
-    u0 = dolfinx.fem.Function(Uf, name="u0")  # displacement, previous converged solution (load step)
+    # u0 = dolfinx.fem.Function(Uf, name="u0")  # displacement, previous converged solution (load step)
     eps_p0 = dolfinx.fem.Function(Tf, name="P0")
     h0 = dolfinx.fem.Function(Hf, name="h0")
 
     S0 = dolfinx.fem.Function(Tf, name="S0")  # stress, previous converged solution (load step)
 
-    u_ = dolfinx.fem.Function(Uf, name="u_")  # displacement, defines state at boundary
+    # u_ = dolfinx.fem.Function(Uf, name="u_")  # displacement, defines state at boundary
 
     eps_po = dolfinx.fem.Function(
         dolfinx.fem.functionspace(domain, ("DP", 0, (3, 3))), name="P"
@@ -103,12 +139,12 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     So = dolfinx.fem.Function(dolfinx.fem.functionspace(domain, ("DP", 0, (3, 3))), name="S")
     ho = dolfinx.fem.Function(dolfinx.fem.functionspace(domain, ("DP", 0)), name="h")
 
-    δu = ufl.TestFunction(Uf)
+    # δu = ufl.TestFunction(Uf)
     δeps_p = ufl.TestFunction(Tf)
     δh = ufl.TestFunction(Hf)
    
     # Define state and variation of state as (ordered) list of functions
-    m, m_restart, δm = [u, eps_p, h], [urestart, eps_p_restart, h_restart], [δu, δeps_p, δh]
+    m, m_restart, δm = [w, eps_p, h], [urestart, srestart, eps_p_restart, h_restart], [δw, δeps_p, δh]
 
 
     def rJ2(A):
@@ -117,6 +153,14 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
         rJ2 = ufl.sqrt(J2)
         return ufl.conditional(rJ2 < 1.0e-12, 0.0, rJ2)
 
+
+    def deg(s):
+        degrad = beta * (s ** 3 - s ** 2) + 3.0*s**2 - 2.0*s**3
+        return degrad
+    
+    def deg_div(s):
+        deg_div = beta * (3* s ** 2 - 2.0 * s ) + 6.0*s - 6.0*s**2
+        return deg_div
 
     # Configuration gradient
     I = ufl.Identity(3)  # noqa: E741
@@ -153,20 +197,33 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     # S, B, h = S.expression(), B.expression(), h.expression()
 
     # Variation of Green-Lagrange strain
-    δE = dolfiny.expression.derivative(E, m, δm)
+    δE = dolfiny.expression.derivative(E, u, δu)
 
     # Plastic multiplier (J2 plasticity: closed-form solution for return-map)
     dλ = ufl.max_value(f, 0)  # ppos = MacAuley bracket
 
     # Weak form (as one-form)
     form = (
-        ufl.inner(δE, S) * dx
+        ufl.inner(δE, deg(s)*S) * dx
         + ufl.inner(δeps_p, (eps_p - eps_p0) - dλ * dgdS) * dx
         + ufl.inner(δh, (h - h0) - dλ * bh * (qh * 1.00 - h)) * dx
+        # + ufl.inner(ufl.grad(δs),(2.0 * Gc * epsilon * ufl.grad(s))) * dx
+        # + (δs * sdot * iMob) * dx 
+        # - (δs * Gc / (2.0 * epsilon) * (1-s)) * dx
+        # + (δs * deg_div(s) * 0.5  * ufl.inner(S,E_el) ) * dx
+        #  + (δs * deg_div(s) * (Sy + 0.5 * bh * h) * h ) * dx
+        
+        # + (δs * (ufl.derivative(deg(s),s,δs)) * (0.5 * ufl.inner(S,E_el) + (Sy + 0.5 * bh * h) * h)) +dx
+        # + ( ufl.inner(ufl.grad(δs),(2.0 * Gc * epsilon * ufl.grad(s))) 
+        #    + δs * (ufl.derivative(deg(s),s,δs) * (0.5 * ufl.inner(S,E_el) + (Sy + 0.5 * bh * h) * h) -
+        #    Gc / (2.0 * epsilon) * (1-s))) * dx
     )
 
     # Overall form (as list of forms)
     forms = dolfiny.function.extract_blocks(form, δm)
+
+
+    
 
 
     t = 0.0
@@ -208,6 +265,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     
     x_min_all, x_max_all, y_min_all, y_max_all, z_min_all, z_max_all = bc.get_dimensions(domain,comm)
     
+
     eps_mac = dlfx.fem.Constant(domain, eps_mac_param * 0.0)
       
     # Adaptive load stepping
@@ -218,9 +276,9 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
         eps_mac.value = eps_mac_param * μ.value * scal
         
   
-        bcs = bc.get_total_linear_displacement_boundary_condition_at_box(domain,comm,functionSpace=Uf,
+        bcs = bc.get_total_linear_displacement_boundary_condition_at_box(domain,comm,functionSpace=Wf,
                                                                          eps_mac=eps_mac,
-                                                                         subspace_idx=-1,
+                                                                         subspace_idx=0,
                                                                          atol=0.02*(x_max_all-x_min_all))
 
         problem.bcs = bcs
@@ -269,21 +327,26 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
             dolfiny.interpolation.interpolate(S, S0)
 
             # Store primal states
-            for source, target in zip([u, eps_p, h], [u0, eps_p0, h0]):
+            for source, target in zip([w, eps_p, h], [wm1, eps_p0, h0]):
                 with source.vector.localForm() as locs, target.vector.localForm() as loct:
                     locs.copy(loct)
             
-            urestart.x.array[:] = u.x.array[:]
+            wrestart.x.array[:] = w.x.array[:]
+            wm1.x.array[:] = w.x.array[:]
             h_restart.x.array[:] = h.x.array[:]
             eps_p_restart.x.array[:] = eps_p.x.array[:]
             
             trestart = t
             t = t+dt
+            
+            
+
+            
         else:
             t = trestart+dt
             
             # after load step failure
-            u.x.array[:] = urestart.x.array[:]
+            w.x.array[:] = wrestart.x.array[:]
             h.x.array[:] = h_restart.x.array[:]
             eps_p.x.array[:] = eps_p_restart.x.array[:]
             

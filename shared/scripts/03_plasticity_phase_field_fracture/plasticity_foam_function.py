@@ -10,7 +10,7 @@ import ufl
 from dolfinx import default_scalar_type as scalar
 
 import matplotlib.pyplot as plt
-# import mesh_iso6892_gmshapi as mg
+import mesh_iso6892_gmshapi as mg
 import numpy as np
 
 import dolfiny
@@ -46,7 +46,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     script_name_without_extension = os.path.splitext(os.path.basename(__file__))[0]
     outputfile_xdmf_path = alex.os.outputfile_xdmf_full_path(script_path,script_name_without_extension)
 
-    with dlfx.io.XDMFFile(comm, os.path.join(alex.os.resources_directory,'msh2xdmf.xdmf'), 'r') as mesh_inp: 
+    with dlfx.io.XDMFFile(comm, os.path.join(script_path,'msh2xdmf.xdmf'), 'r') as mesh_inp: 
             domain = mesh_inp.read_mesh()
 
     
@@ -54,7 +54,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     mu = dolfinx.fem.Constant(domain, scalar(100.0))  # [1e-9 * 1e+11 N/m^2 = 100 GPa]
     la = dolfinx.fem.Constant(domain, scalar(10.00))  # [1e-9 * 1e+10 N/m^2 =  10 GPa]
     Sy = dolfinx.fem.Constant(domain, scalar(0.300))  # initial yield stress [GPa]
-    bh = dolfinx.fem.Constant(domain, scalar(20.00))  # isotropic hardening: saturation rate  [-]
+    H = dolfinx.fem.Constant(domain, scalar(20.00))  # isotropic hardening: saturation rate  [-]
     qh = dolfinx.fem.Constant(domain, scalar(0.100))  # isotropic hardening: saturation value [GPa]
 
 
@@ -72,101 +72,174 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     Ue = basix.ufl.element("P", domain.basix_cell(), p, shape=(domain.geometry.dim,))
     He = basix.ufl.quadrature_element(domain.basix_cell(), value_shape=(), degree=quad_degree)
     Te = basix.ufl.blocked_element(He, shape=(domain.geometry.dim, domain.geometry.dim), symmetry=True)
+    
+    TTe = basix.ufl.element("P", domain.basix_cell(), p, shape=(domain.geometry.dim,domain.geometry.dim))
+    
+    HHe = basix.ufl.element("P", domain.basix_cell(), p, shape=())
 
     # Define function spaces
     Uf = dolfinx.fem.functionspace(domain, Ue)
-    Tf = dolfinx.fem.functionspace(domain, Te)
     Hf = dolfinx.fem.functionspace(domain, He)
+    Tf = dolfinx.fem.functionspace(domain, Te)
+    
+    TTf = dolfinx.fem.functionspace(domain, TTe)
+    HHf = dolfinx.fem.functionspace(domain, HHe)
 
     # Define functions
     u = dolfinx.fem.Function(Uf, name="u")  # displacement
     urestart = dolfinx.fem.Function(Uf, name="urestart")  # displacement
     urestart.x.array[:] = np.full_like(urestart.x.array,0.0,dtype=dolfinx.default_scalar_type)
-    eps_p = dolfinx.fem.Function(Tf, name="P")  # plastic strain
-    eps_p_restart = dolfinx.fem.Function(Tf, name="P_restart")  # plastic strain
-    eps_p_restart.x.array[:] = np.full_like(eps_p_restart.x.array,0.0,dtype=dolfinx.default_scalar_type)
+    
+    
+    def eps(u):
+        return ufl.sym(ufl.nabla_grad(u))
+    
+    eps_p_n = dolfinx.fem.Function(TTf, name="eps_p")  # plastic strain
+    eps_p_n_restart = dolfinx.fem.Function(TTf, name="eps_p_restart")  # plastic strain
+    eps_p_n_restart.x.array[:] = np.full_like(eps_p_n_restart.x.array,0.0,dtype=dolfinx.default_scalar_type)
+    
+    
+    alpha_n = dolfinx.fem.Function(HHf, name="alpha")  # displacement
+    alpha_n_restart = dolfinx.fem.Function(HHf, name="alpha_m1_restart")  # displacement
+    alpha_n_restart.x.array[:] = np.full_like(alpha_n.x.array,0.0,dtype=dolfinx.default_scalar_type)
+    
+    
+    def sig_tr(u):
+        
+        return la * ufl.tr(eps(u)-eps_p_n) * ufl.Identity(domain.geometry.dim) + 2.0 * mu * (eps(u)-eps_p_n)
+    
+    def s_tr(u):
+        return ufl.dev(sig_tr(u))
+    
     h = dolfinx.fem.Function(Hf, name="h")  # isotropic hardening
     h_restart = dolfinx.fem.Function(Hf, name="h_restart")  # isotropic hardening
     h_restart.x.array[:] = np.full_like(h_restart.x.array,0.0,dtype=dolfinx.default_scalar_type)
+    
+    def f_tr(u):
+        return ufl.sqrt(3 / 2 * ufl.inner(s_tr(u), s_tr(u))) - (Sy + H * alpha_n)
+        
+        
+    def f_tr_positive(u):
+        return ufl.conditional(f_tr(u) > -1.0e-12, f_tr(u), 0.0)
+    
+    def alpha_np1(u):
+        return alpha_n + ufl.sqrt(2.0 / 3.0 ) / (2.0 * mu + 2.0 / 3.0 * H) * f_tr_positive(u)
+    
+    
+    def direction(u):
+        nenner = ufl.sqrt(3 / 2 * ufl.inner(s_tr(u), s_tr(u)))
+        direction = ufl.conditional(nenner > 1.0e-8, s_tr(u) / nenner, ufl.as_matrix([[0, 0, 0 ], [0, 0, 0], [0, 0, 0]]))
+        return direction
+        
+    
+    def eps_p_np1(u):
+        return eps_p_n + 1.0 / (2.0 * mu + 2.0 / 3.0 * H) * f_tr_positive(u) * direction(u)
+    
+    def eps_e_np1(u):
+        return eps(u) - eps_p_np1(u)
+    
+    def sigma_np1(u):
+        return la * ufl.tr(eps_e_np1(u)) * ufl.Identity(domain.geometry.dim)  + 2.0 * mu * (eps_e_np1(u))
+    
+    def pot_e_np1(u):
+        return ( 0.5 * ufl.inner(eps_e_np1(u), sigma_np1(u)))
+    
+    def pot_p_np1(u):
+        return ( 0.5 * H * (alpha_np1(u) - alpha_n) ** 2 )
+    
+    def pot(u):
+        return ( pot_e_np1(u) + pot_p_np1(u) ) * dx
+        
+    δu = ufl.TestFunction(Uf)  
+    Res = ufl.derivative(pot(u),u,δu)
+        
+        
+    
+        
 
-    u0 = dolfinx.fem.Function(Uf, name="u0")  # displacement, previous converged solution (load step)
-    eps_p0 = dolfinx.fem.Function(Tf, name="P0")
-    h0 = dolfinx.fem.Function(Hf, name="h0")
+    # u0 = dolfinx.fem.Function(Uf, name="u0")  # displacement, previous converged solution (load step)
+    # eps_p0 = dolfinx.fem.Function(Tf, name="P0")
+    # h0 = dolfinx.fem.Function(Hf, name="h0")
 
-    S0 = dolfinx.fem.Function(Tf, name="S0")  # stress, previous converged solution (load step)
+    sigO = dolfinx.fem.Function(Tf, name="sigma")  # stress, previous converged solution (load step)
 
-    u_ = dolfinx.fem.Function(Uf, name="u_")  # displacement, defines state at boundary
+    # u_ = dolfinx.fem.Function(Uf, name="u_")  # displacement, defines state at boundary
 
-    eps_po = dolfinx.fem.Function(
-        dolfinx.fem.functionspace(domain, ("DP", 0, (3, 3))), name="P"
-    )  # for output
-    So = dolfinx.fem.Function(dolfinx.fem.functionspace(domain, ("DP", 0, (3, 3))), name="S")
-    ho = dolfinx.fem.Function(dolfinx.fem.functionspace(domain, ("DP", 0)), name="h")
+    # eps_po = dolfinx.fem.Function(
+    #     dolfinx.fem.functionspace(domain, ("DP", 0, (3, 3))), name="P"
+    # )  # for output
+    # So = dolfinx.fem.Function(dolfinx.fem.functionspace(domain, ("DP", 0, (3, 3))), name="S")
+    # ho = dolfinx.fem.Function(dolfinx.fem.functionspace(domain, ("DP", 0)), name="h")
 
-    δu = ufl.TestFunction(Uf)
-    δeps_p = ufl.TestFunction(Tf)
-    δh = ufl.TestFunction(Hf)
+    # # δu = ufl.TestFunction(Uf)
+    # δeps_p = ufl.TestFunction(Tf)
+    # δh = ufl.TestFunction(Hf)
    
-    # Define state and variation of state as (ordered) list of functions
-    m, m_restart, δm = [u, eps_p, h], [urestart, eps_p_restart, h_restart], [δu, δeps_p, δh]
+    # # Define state and variation of state as (ordered) list of functions
+    # m, m_restart, δm = [u, eps_p_n, h], [urestart, eps_p_n_restart, h_restart], [δu, δeps_p, δh]
 
 
-    def rJ2(A):
-        """Square root of J2 invariant of tensor A"""
-        J2 = 1 / 2 * ufl.inner(A, A)
-        rJ2 = ufl.sqrt(J2)
-        return ufl.conditional(rJ2 < 1.0e-12, 0.0, rJ2)
+    # def rJ2(A):
+    #     """Square root of J2 invariant of tensor A"""
+    #     J2 = 1 / 2 * ufl.inner(A, A)
+    #     rJ2 = ufl.sqrt(J2)
+    #     return ufl.conditional(rJ2 < 1.0e-12, 0.0, rJ2)
 
 
-    # Configuration gradient
-    I = ufl.Identity(3)  # noqa: E741
-    F = I + ufl.grad(u)  # deformation gradient as function of displacement
+    # # Configuration gradient
+    # I = ufl.Identity(3)  # noqa: E741
+    # F = I + ufl.grad(u)  # deformation gradient as function of displacement
 
-    # Strain measures
-    E = 1 / 2 * (F.T * F - I)  # E = E(F), total Green-Lagrange strain
-    E_el = E - eps_p  # E_el = E - P, elastic strain = total strain - plastic strain
+    # # Strain measures
+    # E = 1 / 2 * (F.T * F - I)  # E = E(F), total Green-Lagrange strain
+    # E_el = E - eps_p_n  # E_el = E - P, elastic strain = total strain - plastic strain
 
-    # Stress
-    S = 2 * mu * E_el + la * ufl.tr(E_el) * I  # S = S(E_el), PK2, St.Venant-Kirchhoff
+    # # Stress
+    # S = 2 * mu * E_el + la * ufl.tr(E_el) * I  # S = S(E_el), PK2, St.Venant-Kirchhoff
 
-    # Wrap variable around expression (for diff)
-    S, h = ufl.variable(S),  ufl.variable(h)
+    # # Wrap variable around expression (for diff)
+    # S, h = ufl.variable(S),  ufl.variable(h)
 
-    # Yield function
-    f = ufl.sqrt(3) * rJ2(ufl.dev(S)) - (Sy + h)  # von Mises criterion (J2), with hardening
+    # # Yield function
+    # f = ufl.sqrt(3) * rJ2(ufl.dev(S)) - (Sy + h)  # von Mises criterion (J2), with hardening
 
-    # Plastic potential
-    g = f
+    # # Plastic potential
+    # g = f
 
-    # Derivative of plastic potential wrt stress
-    dgdS = ufl.diff(g, S)
+    # # Derivative of plastic potential wrt stress
+    # dgdS = ufl.diff(g, S)
 
-    # Total differential of yield function, used for checks only
-    # df = (
-    #     +ufl.inner(ufl.diff(f, S), S - S0)
-    #     + ufl.inner(ufl.diff(f, h), h - h0)
-    #     # + ufl.inner(ufl.diff(f, B), B - B0)
+    # # Total differential of yield function, used for checks only
+    # # df = (
+    # #     +ufl.inner(ufl.diff(f, S), S - S0)
+    # #     + ufl.inner(ufl.diff(f, h), h - h0)
+    # #     # + ufl.inner(ufl.diff(f, B), B - B0)
+    # # )
+
+    # # Unwrap expression from variable
+    # S,  h = S.expression(), h.expression()
+    # # S, B, h = S.expression(), B.expression(), h.expression()
+
+    # # Variation of Green-Lagrange strain
+    # δE = dolfiny.expression.derivative(E, m, δm)
+
+    # # Plastic multiplier (J2 plasticity: closed-form solution for return-map)
+    # dλ = ufl.max_value(f, 0)  # ppos = MacAuley bracket
+
+    # # Weak form (as one-form)
+    # form = (
+    #     ufl.inner(δE, S) * dx
+    #     + ufl.inner(δeps_p, (eps_p_n - eps_p0) - dλ * dgdS) * dx
+    #     + ufl.inner(δh, (h - h0) - dλ * H * (qh * 1.00 - h)) * dx
     # )
 
-    # Unwrap expression from variable
-    S,  h = S.expression(), h.expression()
-    # S, B, h = S.expression(), B.expression(), h.expression()
-
-    # Variation of Green-Lagrange strain
-    δE = dolfiny.expression.derivative(E, m, δm)
-
-    # Plastic multiplier (J2 plasticity: closed-form solution for return-map)
-    dλ = ufl.max_value(f, 0)  # ppos = MacAuley bracket
-
-    # Weak form (as one-form)
-    form = (
-        ufl.inner(δE, S) * dx
-        + ufl.inner(δeps_p, (eps_p - eps_p0) - dλ * dgdS) * dx
-        + ufl.inner(δh, (h - h0) - dλ * bh * (qh * 1.00 - h)) * dx
-    )
-
-    # Overall form (as list of forms)
-    forms = dolfiny.function.extract_blocks(form, δm)
+    # # Overall form (as list of forms)
+    # forms = dolfiny.function.extract_blocks(form, δm)
+    # Create output xdmf file -- open in Paraview with Xdmf3ReaderT
+    ofile = dolfiny.io.XDMFFile(comm, f"TEST.xdmf", "w")
+    # Write mesh, meshtags
+    # ofile.write_mesh_meshtags(mesh, mts)
+    ofile.write_mesh(domain)
 
 
     t = 0.0
@@ -176,7 +249,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     dt = Tend/steps
     
     # time stepping
-    max_iters = 8
+    max_iters = 15
     min_iters = 4
     dt_scale_down = 0.5
     dt_scale_up = 2.0
@@ -199,8 +272,9 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     opts.setValue('-log_view', None)      # Ensure this is not set
 
     # Create nonlinear problem: SNES
-    problem : dolfiny.snesblockproblem.SNESBlockProblem = dolfiny.snesblockproblem.SNESBlockProblem(forms, m, prefix=name)
+    # problem : dolfiny.snesblockproblem.SNESBlockProblem = dolfiny.snesblockproblem.SNESBlockProblem(forms, m, prefix=name)
 
+    problem : dolfiny.snesblockproblem.SNESBlockProblem = dolfiny.snesblockproblem.SNESBlockProblem([Res], [u], prefix=name)
 
     # Set up load steps
     # K = 30  # number of steps per load phase
@@ -208,6 +282,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     
     x_min_all, x_max_all, y_min_all, y_max_all, z_min_all, z_max_all = bc.get_dimensions(domain,comm)
     
+
     eps_mac = dlfx.fem.Constant(domain, eps_mac_param * 0.0)
       
     # Adaptive load stepping
@@ -215,7 +290,10 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
         μ.value = t
         dolfiny.utils.pprint(f"\n+++ Processing load factor μ = {μ.value:5.4f}")
 
+        
         eps_mac.value = eps_mac_param * μ.value * scal
+        if t >= Tend / 2.0:
+            eps_mac.value = eps_mac_param * Tend/2.0 * scal -  eps_mac_param * (t-Tend/2.0) * scal
         
   
         bcs = bc.get_total_linear_displacement_boundary_condition_at_box(domain,comm,functionSpace=Uf,
@@ -266,16 +344,48 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
         if not restart_solution:
             # after load step success
             # Store stress state
-            dolfiny.interpolation.interpolate(S, S0)
+            # dolfiny.interpolation.interpolate(S, S0)
 
             # Store primal states
-            for source, target in zip([u, eps_p, h], [u0, eps_p0, h0]):
-                with source.vector.localForm() as locs, target.vector.localForm() as loct:
-                    locs.copy(loct)
+            # for source, target in zip([u, eps_p_n, h], [u0, eps_p0, h0]):
+            #     with source.vector.localForm() as locs, target.vector.localForm() as loct:
+            #         locs.copy(loct)
             
+            
+            # post-process dGamma
+            dGamma = f_tr_positive(u) / (2 * mu + 2 / 3 * H)
+            
+            # update on history fields
+            alpha_expr = dlfx.fem.Expression(alpha_n + ufl.sqrt(2/3)*dGamma, HHf.element.interpolation_points())
+            alpha_n.interpolate(alpha_expr)
+            
+            
+            eps_p_expr = dlfx.fem.Expression(eps_p_n + dGamma * direction(u), TTf.element.interpolation_points())
+            eps_p_n.interpolate(eps_p_expr)
+            
+            # update on history fields
+            # alpha_np1_field = alpha_n + ufl.sqrt(2/3) * dGamma
+            # alpha_n.x.array[:] = alpha_np1_field.x.array[:]
+            
+            # eps_p_n.x.array[:] = eps_p_np1(u).x.array[:]
+            
+            
+            # then update displacements 
             urestart.x.array[:] = u.x.array[:]
-            h_restart.x.array[:] = h.x.array[:]
-            eps_p_restart.x.array[:] = eps_p.x.array[:]
+            
+                            # Write output
+            ofile.write_function(u, t)
+
+            # Interpolate and write output
+            # dolfiny.interpolation.interpolate(eps_p, Po)
+            # # dolfiny.interpolation.interpolate(B, Bo)
+            # dolfiny.interpolation.interpolate(S, So)
+            # dolfiny.interpolation.interpolate(h, ho)
+            ofile.write_function(eps_p_n, t)
+            # ofile.write_function(Bo, step)
+            dolfiny.interpolation.interpolate(sigma_np1(u), sigO)
+            ofile.write_function(sigO, t)
+            ofile.write_function(alpha_n, t)
             
             trestart = t
             t = t+dt
@@ -284,11 +394,9 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
             
             # after load step failure
             u.x.array[:] = urestart.x.array[:]
-            h.x.array[:] = h_restart.x.array[:]
-            eps_p.x.array[:] = eps_p_restart.x.array[:]
             
     
-    sig_vm = le.sigvM(S)
+    sig_vm = le.sigvM(sigma_np1(u))
     simulation_result = pp.percentage_of_volume_above(domain,sig_vm,0.9*Sy,comm,ufl.dx,quadrature_element=True)
     return simulation_result    
                 

@@ -95,8 +95,8 @@ def write_field(domain: dlfx.mesh.Mesh,
                                     comm: MPI.Intercomm) :
     
     # Se = ufl.FiniteElement("Quadrature", domain.ufl_cell(), degree=2, quad_scheme="default")
-    Se = ufl.FiniteElement('CG', domain.ufl_cell(), 1)  
-    S = dlfx.fem.FunctionSpace(domain, Se)
+    Se = basix.ufl.element("P", domain.basix_cell(), 1, shape=())
+    S = dlfx.fem.functionspace(domain, Se)
     field_interp = dlfx.fem.Function(S)
     
     interpolate_to_vertices_for_output(field, S, field_interp)
@@ -120,11 +120,11 @@ def interpolate_to_vertices_for_output(field, S, field_interp):
     # https://github.com/michalhabera/dolfiny/blob/master/dolfiny/interpolation.py
         return element._family == "Quadrature"
 
-    if is_quadrature_element(field.function_space.ufl_element()): # quadrature elements need to be interpolated via expression
-        expr = dlfx.fem.Expression(field,S.element.interpolation_points())
-        field_interp.interpolate(expr)
-    else:
-        field_interp.interpolate(field) 
+    # if is_quadrature_element(field.function_space.ufl_element()): # quadrature elements need to be interpolated via expression
+    expr = dlfx.fem.Expression(field,S.element.interpolation_points())
+    field_interp.interpolate(expr)
+    # else:
+    #     field_interp.interpolate(field) 
     
     # expr = dlfx.fem.Expression(field,S.element.interpolation_points())
     # field_interp.interpolate(expr)
@@ -136,8 +136,9 @@ def write_vector_field(domain: dlfx.mesh.Mesh,
                                     t: dlfx.fem.Constant,
                                     comm: MPI.Intercomm) :
         
-    Se = ufl.VectorElement('CG', domain.ufl_cell(), 1)
-    S = dlfx.fem.FunctionSpace(domain, Se)
+    Se = basix.ufl.element("P", domain.basix_cell(), 1, shape=(domain.geometry.dim,))
+    S = dlfx.fem.functionspace(domain, Se)
+    # S = dlfx.fem.FunctionSpace(domain, Se)
     
     field_interp = dlfx.fem.Function(S)
     
@@ -149,15 +150,14 @@ def write_vector_field(domain: dlfx.mesh.Mesh,
 
     
 def write_tensor_fields(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm, tensor_fields_as_functions, tensor_field_names, outputfile_xdmf_path: str, t: float):
-    TENe = ufl.TensorElement('DG', domain.ufl_cell(), 0)
-    TEN = dlfx.fem.FunctionSpace(domain, TENe) 
+    TEN = dlfx.fem.functionspace(domain, ("DP", 0, (3, 3)))
     with dlfx.io.XDMFFile(comm, outputfile_xdmf_path, 'a') as xdmf_out:
         for n  in range(0,len(tensor_fields_as_functions)):
             tensor_field_function = tensor_fields_as_functions[n]
             tensor_field_name = tensor_field_names[n]
             tensor_field_expression = dlfx.fem.Expression(tensor_field_function, 
-                                                        TEN.element.interpolation_points())
-            out_tensor_field = dlfx.fem.Function(TEN)
+                                                         TEN.element.interpolation_points())
+            out_tensor_field = dlfx.fem.Function(TEN) 
             out_tensor_field.interpolate(tensor_field_expression)
             out_tensor_field.name = tensor_field_name
             
