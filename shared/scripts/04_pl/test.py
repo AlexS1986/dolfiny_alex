@@ -1,5 +1,5 @@
 import numpy as np
-import plasticity_foam_function_bu as sim
+import plasticity_foam_function as sim
 from mpi4py import MPI
 import sys
 import os
@@ -15,7 +15,7 @@ script_name_without_extension = os.path.splitext(os.path.basename(__file__))[0]
 
 tensor_critical_value_hom_material =0.0
 
-tensor_param = np.array([[0.001, 0.0, 0.0],
+tensor_param = np.array([[0.01, 0.0, 0.0],
                              [0.0, 0.0, 0.0],
                              [0.0, 0.0, 0.0]])
 

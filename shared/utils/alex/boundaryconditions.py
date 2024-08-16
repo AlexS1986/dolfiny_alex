@@ -102,6 +102,14 @@ def get_boundary_of_box_as_function(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm,
         return reduce(np.logical_or, boundaries)
     return boundary
 
+def get_right_boundary_of_box_as_function(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm, atol: float=None) -> Callable:
+    x_min_all, x_max_all, y_min_all, y_max_all, z_min_all, z_max_all = get_dimensions(domain, comm)
+    def boundary(x):
+        xmax = close_func(x[0],x_max_all,atol=atol)
+        boundaries = [xmax]
+        return reduce(np.logical_or, boundaries)
+    return boundary
+
 def get_corner_of_box_as_function(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm) -> Callable:
     x_min_all, x_max_all, y_min_all, y_max_all, z_min_all, z_max_all = get_dimensions(domain, comm)
     def boundary(x):

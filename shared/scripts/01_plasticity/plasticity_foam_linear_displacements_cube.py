@@ -25,7 +25,7 @@ import alex.boundaryconditions as bc
 # https://doi.org/10.24355/dbbs.084-202112170722-0
 
 # Basic settings
-name = "solid_plasticity_monolithic"
+name = "Von_Mises"
 comm = MPI.COMM_WORLD
 
 # Geometry and mesh parameters
@@ -52,8 +52,11 @@ logfile_path = alex.os.logfile_full_path(script_path,script_name_without_extensi
 outputfile_graph_path = alex.os.outputfile_graph_full_path(script_path,script_name_without_extension)
 outputfile_xdmf_path = alex.os.outputfile_xdmf_full_path(script_path,script_name_without_extension)
 
-with dlfx.io.XDMFFile(comm, os.path.join(script_path,'msh2xdmf.xdmf'), 'r') as mesh_inp: 
-        domain = mesh_inp.read_mesh()
+# with dlfx.io.XDMFFile(comm, os.path.join(script_path,'msh2xdmf.xdmf'), 'r') as mesh_inp: 
+#         domain = mesh_inp.read_mesh()
+        
+N = 16 
+domain = dolfinx.mesh.create_unit_cube(comm,N,N,N,cell_type=dolfinx.mesh.CellType.hexahedron)
 
 # Write mesh and meshtags to file
 with dolfiny.io.XDMFFile(comm, f"{name}.xdmf", "w") as ofile:

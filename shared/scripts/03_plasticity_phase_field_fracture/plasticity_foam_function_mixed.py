@@ -87,7 +87,10 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     TTe = basix.ufl.element("P", domain.basix_cell(), p, shape=(domain.geometry.dim,domain.geometry.dim))
     
     HHe = basix.ufl.element("P", domain.basix_cell(), p, shape=())
+    Le = basix.ufl.element("P", domain.basix_cell(), p, shape=())
 
+
+    Wf = dlfx.fem.functionspace(domain, basix.ufl.mixed_element([Ue, HHe, Le]))
     # Define function spaces
     Uf = dolfinx.fem.functionspace(domain, Ue)
     Hf = dolfinx.fem.functionspace(domain, He)
@@ -97,27 +100,45 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     HHf = dolfinx.fem.functionspace(domain, HHe)
 
     # Define functions
-    u = dolfinx.fem.Function(Uf, name="u")  # displacement
-    urestart = dolfinx.fem.Function(Uf, name="urestart")  # displacement
-    urestart.x.array[:] = np.full_like(urestart.x.array,0.0,dtype=dolfinx.default_scalar_type)
+    w = dolfinx.fem.Function(Wf, name="w")  # displacement
+    wm1 = dolfinx.fem.Function(Wf, name="wm1")  # displacement
+    wrestart = dolfinx.fem.Function(Wf, name="wrestart")  # displacement
+    wrestart.x.array[:] = np.full_like(wrestart.x.array,0.0,dtype=dolfinx.default_scalar_type)
+   
+    u, alpha, lm = w.split()
+    u_m1, alpha_m1, lm_m1 = w.split()
+    
+    # u = dolfinx.fem.Function(Uf, name="u")  # displacement
+    # urestart = dolfinx.fem.Function(Uf, name="urestart")  # displacement
+    # urestart.x.array[:] = np.full_like(urestart.x.array,0.0,dtype=dolfinx.default_scalar_type)
     
     
     def eps(u):
         return ufl.sym(ufl.nabla_grad(u))
     
     eps_p_n = dolfinx.fem.Function(TTf, name="eps_p")  # plastic strain
+    eps_p_n_temp = dolfinx.fem.Function(TTf, name="eps_p_temp")  # plastic strain
     eps_p_n_restart = dolfinx.fem.Function(TTf, name="eps_p_restart")  # plastic strain
     eps_p_n_restart.x.array[:] = np.full_like(eps_p_n_restart.x.array,0.0,dtype=dolfinx.default_scalar_type)
     
     
-    alpha_n = dolfinx.fem.Function(HHf, name="alpha")
-    alpha_np1 = dolfinx.fem.Function(HHf, name="alphanp1")    
+    alpha_n = dolfinx.fem.Function(HHf, name="alpha") 
+    alpha_n_temp = dolfinx.fem.Function(HHf, name="alpha_tmp") 
     alpha_n_restart = dolfinx.fem.Function(HHf, name="alpha_m1_restart")  
     alpha_n_restart.x.array[:] = np.full_like(alpha_n.x.array,0.0,dtype=dolfinx.default_scalar_type)
     
     
-    f_out = dolfinx.fem.Function(HHf, name="f") 
+    f_out = dolfinx.fem.Function(HHf, name="f")
+    f_zero = dolfinx.fem.Function(HHf, name="f_zero")
+    f_zero.x.array[:] = np.zeros_like(f_zero.x.array[:]) 
     
+    
+        
+    
+    
+    def dGammaF(u, alpha):
+        return ( alpha - alpha_n ) * ufl.sqrt(3.0 / 2.0)
+
     def sig_tr(u):
         
         return la * ufl.tr(eps(u)-eps_p_n) * ufl.Identity(domain.geometry.dim) + 2.0 * mu * (eps(u)-eps_p_n)
@@ -125,58 +146,63 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     def s_tr(u):
         return ufl.dev(sig_tr(u))
     
-    def f_tr(u):
-        # return ufl.sqrt(3 / 2 * ufl.inner(s_tr(u), s_tr(u))) - (Sy + H * alpha_n)
-        return ufl.sqrt( 3 / 2 * ufl.inner(s_tr(u), s_tr(u))) - (Sy + H * alpha_n)
-        
-        
-    def f_tr_positive(u):
-        return ufl.conditional(f_tr(u) > 1.0e-12, f_tr(u), 0.0)
-    
-    # def alpha_np1(u):
-    #     return alpha_n + ufl.sqrt(2.0 / 3.0 ) * f_tr_positive(u) / (2.0 * mu + H * 2.0 / 3.0 ) 
-    
-    
     def direction(u):
-        nenner = ufl.sqrt(3 / 2 * ufl.inner(s_tr(u), s_tr(u)))
+        nenner = ufl.sqrt(ufl.inner(s_tr(u), s_tr(u)))
         direction = ufl.conditional(nenner > 1.0e-8, s_tr(u) / nenner, ufl.as_matrix([[0, 0, 0 ], [0, 0, 0], [0, 0, 0]]))
         return direction
         
     
-    def alpha_np1_consistent():
-        return ufl.conditional(alpha_np1 > alpha_n, alpha_np1, alpha_n)
+    def eps_p_np1(u,alpha):
+        return eps_p_n + ( alpha - alpha_n ) * ufl.sqrt(3.0 / 2.0)* direction(u)
     
-    def dGammaF():
-        return ( alpha_np1_consistent() - alpha_n ) * ufl.sqrt(2/3)
+    def eps_e_np1(u,alpha):
+        return eps(u) - eps_p_np1(u,alpha)
+    
+    # def sigma_np1(u,alpha):
+    #     return la * ufl.tr(eps_e_np1(u,alpha)) * ufl.Identity(domain.geometry.dim)  + 2.0 * mu * (eps_e_np1(u,alpha))
+    
+    def s_np1(u):
+        return ufl.dev(la * ufl.tr(eps_e_np1(u,alpha)) * ufl.Identity(domain.geometry.dim)  + 2.0 * mu * (eps_e_np1(u,alpha)))
+    
+    def pot_e_np1(u,alpha):
+        eps_p_np1 = eps_p_n + ( alpha - alpha_n ) * ufl.sqrt(3.0 / 2.0)* direction(u)
         
+        return ( 0.5 * ufl.inner(eps(u) - eps_p_np1, la * ufl.tr(eps(u) - eps_p_np1) * ufl.Identity(domain.geometry.dim)
+                                 + 2.0 * mu * (eps(u) - eps_p_np1)
+    ))
     
-    def eps_p_np1(u):
-        return eps_p_n + dGammaF()  * direction(u)
-    
-    def eps_e_np1(u):
-        return eps(u) - eps_p_np1(u)
-    
-    def sigma_np1(u):
-        return la * ufl.tr(eps_e_np1(u)) * ufl.Identity(domain.geometry.dim)  + 2.0 * mu * (eps_e_np1(u))
-    
-    def pot_e_np1(u):
-        return ( 0.5 * ufl.inner(eps_e_np1(u), sigma_np1(u)))
-    
-    def pot_p_np1(alpha_np1):
-        return ( 0.5 * H * (alpha_np1 - alpha_n) ** 2 )
+    def pot_p_np1(alpha):
+        return ( 0.5 * H * alpha ** 2 )
         # return ( 0.5 * H * (alpha_np1(u)) ** 2 )
     
-    def pot(u, alpha_np1):
-        return ( pot_e_np1(u) + pot_p_np1(alpha_np1) ) * dx
+    
+    def f(u,alpha):
+        # return ufl.sqrt(3 / 2 * ufl.inner(s_tr(u), s_tr(u))) - (Sy + H * alpha_n)
+        return ufl.sqrt(ufl.inner(s_np1(u), s_np1(u))) - ufl.sqrt(2/3) * (Sy + H * alpha)
+    
+    def penalty(u):
+        gamma = 99.0 
+        return (gamma / 2.0) * ufl.max_value(0,f(u)) ** 2
         
-    δu = ufl.TestFunction(Uf)  
-    δalpha = ufl.TestFunction(HHf)
-    form = ( ufl.derivative(pot(u,alpha_np1),u,δu) + ufl.derivative(pot(u,alpha_np1),alpha_np1,δalpha) )
+    def constraint(u,alpha,lm):
+        return lm * (f(u,alpha))
+    
+    def lagrange(u,alpha,lm):
+        return ( pot_e_np1(u,alpha) + pot_p_np1(alpha) - constraint(u,alpha,lm)) * dx
+    
+
         
-    δm = [δu, δalpha]
-    m = [u, alpha_np1]
+    δw = ufl.TestFunction(Wf) 
+    δu, δalpha, δlm  = ufl.split(δw)
+    
+    # δeps = ufl.derivative(eps(u),u,δu) 
+    
+    # Res = ufl.inner(sigma_np1(u),δeps) * dx
+     
+    Res = ufl.derivative(lagrange(u,alpha,lm),u,δu)  + ufl.derivative(lagrange(u,alpha,lm),alpha,δalpha) + ufl.derivative(lagrange(u,alpha,lm),lm,δlm)
         
-    forms = dolfiny.function.extract_blocks(form, δm)
+        
+    
         
 
     # u0 = dolfinx.fem.Function(Uf, name="u0")  # displacement, previous converged solution (load step)
@@ -268,7 +294,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     t = 0.0
     trestart = 0.0
     Tend = 1.0
-    steps = 100
+    steps = 20
     dt = Tend/steps
     
     # time stepping
@@ -297,7 +323,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     # Create nonlinear problem: SNES
     # problem : dolfiny.snesblockproblem.SNESBlockProblem = dolfiny.snesblockproblem.SNESBlockProblem(forms, m, prefix=name)
 
-    problem : dolfiny.snesblockproblem.SNESBlockProblem = dolfiny.snesblockproblem.SNESBlockProblem(forms, m, prefix=name)
+    problem : dolfiny.snesblockproblem.SNESBlockProblem = dolfiny.snesblockproblem.SNESBlockProblem([Res], [w], prefix=name)
 
     # Set up load steps
     # K = 30  # number of steps per load phase
@@ -387,23 +413,30 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
             
             
             # post-process dGamma
-            dGamma = f_tr_positive(u) / (2.0 * mu + H * 2.0 / 3.0)
+            # dGamma = f_tr_positive(u) / (2.0 * mu + H * 2.0 / 3.0)
             
             # update on history fields
-            alpha_expr = dlfx.fem.Expression(alpha_n + ufl.sqrt(2.0/3.0)*dGamma, HHf.element.interpolation_points())
-            alpha_n.interpolate(alpha_expr)
+            alpha_expr = dlfx.fem.Expression(alpha, HHf.element.interpolation_points())
+            
+            # alpha_n.x.array[:] = alpha_np1(u).x.array[:]
+            
+            alpha_n_temp.interpolate(alpha_expr)
             
             
-            eps_p_expr = dlfx.fem.Expression(eps_p_n + dGamma * direction(u), TTf.element.interpolation_points())
-            eps_p_n.interpolate(eps_p_expr)
+            eps_p_expr = dlfx.fem.Expression(eps_p_n + dGammaF(u) * direction(u), TTf.element.interpolation_points())
+            eps_p_n_temp.interpolate(eps_p_expr)
+            
+            alpha_n.x.array[:] = alpha_n.x.array[:]
+            eps_p_n.x.array[:] = eps_p_n_temp.x.array[:]
+            
             
             
            
                 
             
-            f_out_expr = dlfx.fem.Expression(f_tr(u), HHf.element.interpolation_points())
-            f_out.interpolate(f_out_expr)
-            ofile.write_function(f_out, t)
+            # f_out_expr = dlfx.fem.Expression(f_tr(u), HHf.element.interpolation_points())
+            # f_out.interpolate(f_out_expr)
+            # ofile.write_function(f_out, t)
             
             # update on history fields
             # alpha_np1_field = alpha_n + ufl.sqrt(2/3) * dGamma
@@ -413,7 +446,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
             
             
             # then update displacements 
-            urestart.x.array[:] = u.x.array[:]
+            wrestart.x.array[:] = w.x.array[:]
             
 
                 
@@ -432,15 +465,15 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
             ofile.write_function(eps_p_n, t)
             # ofile.write_function(Bo, step)
             
-            Rx_top, Ry_top, Rz_top = reaction_force_3D(sig_tr(u),n=n,ds=ds_right_tagged(1),comm=comm)
-            if comm.Get_rank() == 0:
-                print(f"time: {t}  R_x: {Rx_top}")
-            if comm.Get_rank() == 0:
-                pp.write_to_graphs_output_file(outputfile_graph_path,eps_mac.value[0,0], Rx_top, Ry_top, Rz_top)
+            # Rx_top, Ry_top, Rz_top = reaction_force_3D(sig_tr(u),n=n,ds=ds_right_tagged(1),comm=comm)
+            # if comm.Get_rank() == 0:
+            #     print(f"time: {t}  R_x: {Rx_top}")
+            # if comm.Get_rank() == 0:
+            #     pp.write_to_graphs_output_file(outputfile_graph_path,eps_mac.value[0,0], Rx_top, Ry_top, Rz_top)
             
-            dolfiny.interpolation.interpolate(sig_tr(u), sigO)
-            ofile.write_function(sigO, t)
-            ofile.write_function(alpha_n, t)
+            # dolfiny.interpolation.interpolate(sig_tr(u), sigO)
+            # ofile.write_function(sigO, t)
+            # ofile.write_function(alpha_n, t)
             
             trestart = t
             t = t+dt
@@ -448,14 +481,15 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
             t = trestart+dt
             
             # after load step failure
-            u.x.array[:] = urestart.x.array[:]
+            w.x.array[:] = wrestart.x.array[:]
            
     if comm.Get_rank() == 0:
         pp.print_graphs_plot(outputfile_graph_path,script_path,legend_labels=["Rx", "Ry", "Rz"])
  
     
-    sig_vm = le.sigvM(sigma_np1(u))
-    simulation_result = pp.percentage_of_volume_above(domain,sig_vm,0.9*Sy,comm,ufl.dx,quadrature_element=True)
+    # sig_vm = le.sigvM(sigma_np1(u))
+    simulation_result = 0
+    # simulation_result = 0 pp.percentage_of_volume_above(domain,sig_vm,0.9*Sy,comm,ufl.dx,quadrature_element=True)
     return simulation_result    
                 
             
