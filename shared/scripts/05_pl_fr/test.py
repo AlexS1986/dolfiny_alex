@@ -1,5 +1,5 @@
 import numpy as np
-import plasticity_von_mises as sim
+import plasticity_fr as sim
 from mpi4py import MPI
 import sys
 import os

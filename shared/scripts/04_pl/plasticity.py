@@ -375,6 +375,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
         # mesh.geometry.cmap.non_affine_max_its = 20
 
         # Write output
+        u.x.scatter_forward()
         ofile.write_function(u, step)
 
         # Interpolate and write output

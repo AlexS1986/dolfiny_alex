@@ -281,6 +281,7 @@ def run_simulation(scal,eps_mac_param, comm: MPI.Intercomm):
     # # Overall form (as list of forms)
     # forms = dolfiny.function.extract_blocks(form, δm)
     # Create output xdmf file -- open in Paraview with Xdmf3ReaderT
+    
     ofile = dolfiny.io.XDMFFile(comm, f"TEST.xdmf", "w")
     # Write mesh, meshtags
     # ofile.write_mesh_meshtags(mesh, mts)

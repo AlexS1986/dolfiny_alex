@@ -315,6 +315,59 @@ def get_total_linear_displacement_boundary_condition_at_box_for_incremental_form
     return bcs
 
 
+def define_dirichlet_bc_from_value(domain: dlfx.mesh.Mesh,
+                                                         desired_value_at_boundary: float,
+                                                         coordinate_idx,
+                                                         where_function,
+                                                         functionSpace: dlfx.fem.FunctionSpace,
+                                                         subspace_idx: int) -> dlfx.fem.DirichletBC:
+        fdim = domain.topology.dim-1
+        facets_at_boundary = dlfx.mesh.locate_entities_boundary(domain, fdim, where_function)
+        if subspace_idx < 0:
+            space = functionSpace.sub(coordinate_idx)
+        else:
+            space = functionSpace.sub(subspace_idx).sub(coordinate_idx)
+        dofs_at_boundary = dlfx.fem.locate_dofs_topological(space, fdim, facets_at_boundary)
+        bc = dlfx.fem.dirichletbc(desired_value_at_boundary,dofs_at_boundary,space)
+        return bc
+    
+def get_dimensions(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm):
+        x_min = np.min(domain.geometry.x[:,0]) 
+        x_max = np.max(domain.geometry.x[:,0])   
+        y_min = np.min(domain.geometry.x[:,1]) 
+        y_max = np.max(domain.geometry.x[:,1])   
+        z_min = np.min(domain.geometry.x[:,2]) 
+        z_max = np.max(domain.geometry.x[:,2])
+
+        # find global min/max over all mpi processes
+        comm.Barrier()
+        x_min_all = comm.allreduce(x_min, op=MPI.MIN)
+        x_max_all = comm.allreduce(x_max, op=MPI.MAX)
+        y_min_all = comm.allreduce(y_min, op=MPI.MIN)
+        y_max_all = comm.allreduce(y_max, op=MPI.MAX)
+        z_min_all = comm.allreduce(z_min, op=MPI.MIN)
+        z_max_all = comm.allreduce(z_max, op=MPI.MAX)
+        comm.Barrier()
+        return x_min_all, x_max_all, y_min_all, y_max_all, z_min_all, z_max_all
+    
+from functools import reduce
+    
+def get_corner_of_box_as_function(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm):
+        x_min_all, x_max_all, y_min_all, y_max_all, z_min_all, z_max_all = get_dimensions(domain, comm)
+        def boundary(x):
+            xmin = np.isclose(x[0],x_min_all)
+            xmax = np.isclose(x[0],x_max_all)
+            ymin = np.isclose(x[1],y_min_all)
+            ymax = np.isclose(x[1],y_max_all)
+            if domain.geometry.dim == 3:
+                zmin = np.isclose(x[2],z_min_all)
+                zmax = np.isclose(x[2],z_max_all)
+                boundaries = [xmin, ymin, zmin]
+            else: #2D
+                boundaries = [xmin, ymin]
+            return reduce(np.logical_and, boundaries)
+        return boundary
+
 
 
         

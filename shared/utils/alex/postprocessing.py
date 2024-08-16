@@ -136,13 +136,13 @@ def write_vector_field(domain: dlfx.mesh.Mesh,
                                     t: dlfx.fem.Constant,
                                     comm: MPI.Intercomm) :
         
-    Se = basix.ufl.element("P", domain.basix_cell(), 1, shape=(domain.geometry.dim,))
-    S = dlfx.fem.functionspace(domain, Se)
+    Ve = basix.ufl.element("P", domain.basix_cell(), 1, shape=(domain.geometry.dim,))
+    V = dlfx.fem.functionspace(domain, Ve)
     # S = dlfx.fem.FunctionSpace(domain, Se)
     
-    field_interp = dlfx.fem.Function(S)
+    field_interp = dlfx.fem.Function(V)
     
-    interpolate_to_vertices_for_output(field, S, field_interp)
+    interpolate_to_vertices_for_output(field, V, field_interp)
 
     # field_interp.name = field.name
     write_to_output_file(outputfile_path, t, comm, field_interp)
@@ -164,8 +164,8 @@ def write_tensor_fields(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm, tensor_fiel
             xdmf_out.write_function(out_tensor_field,t)
 
 def write_vector_fields(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm, vector_fields_as_functions, vector_field_names, outputfile_xdmf_path: str, t: float):
-    Ve = ufl.VectorElement('CG', domain.ufl_cell(), 1)
-    V = dlfx.fem.FunctionSpace(domain, Ve) 
+    Ve = basix.ufl.element("P", domain.basix_cell(), 1, shape=(domain.geometry.dim,))
+    V = dlfx.fem.functionspace(domain, Ve)
     xdmf_out = dlfx.io.XDMFFile(comm, outputfile_xdmf_path, 'a')
     for n  in range(0,len(vector_fields_as_functions)):
             vector_field_function = vector_fields_as_functions[n]
@@ -180,8 +180,8 @@ def write_vector_fields(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm, vector_fiel
     xdmf_out.close()
             
 def write_scalar_fields(domain: dlfx.mesh.Mesh, comm: MPI.Intercomm, scalar_fields_as_functions, scalar_field_names, outputfile_xdmf_path: str, t: float):
-    Se = ufl.FiniteElement('CG', domain.ufl_cell(), 1)
-    S = dlfx.fem.FunctionSpace(domain, Se) 
+    Se = basix.ufl.element("P", domain.basix_cell(), 1, shape=(domain.geometry.dim,))
+    S = dlfx.fem.functionspace(domain, Se)
     xdmf_out = dlfx.io.XDMFFile(comm, outputfile_xdmf_path, 'a')
     for n  in range(0,len(scalar_fields_as_functions)):
             scalar_field_function = scalar_fields_as_functions[n]
